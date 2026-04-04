@@ -4,20 +4,13 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 from kivy.uix.progressbar import ProgressBar
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.gridlayout import GridLayout
 from kivy.uix.tabbedpanel import TabbedPanel
 from kivy.uix.tabbedpanel import TabbedPanelHeader
 from kivy.uix.recycleview import RecycleView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.recycleboxlayout import RecycleBoxLayout
-from kivy.uix.behaviors import FocusBehavior
-from kivy.uix.recycleview.layout import LayoutSelectionBehavior
 from kivy.uix.image import AsyncImage
-from kivy.uix.checkbox import CheckBox
 from kivy.uix.spinner import Spinner
-from kivy.uix.popup import Popup
-from kivy.uix.filechooser import FileChooserListView
 from kivy.core.window import Window
 from kivy.clock import Clock
 from kivy.utils import platform
@@ -25,9 +18,27 @@ from kivy.metrics import dp
 
 import threading
 import os
-import json
 import yt_dlp
-from pathlib import Path
+
+
+def get_download_path():
+    if platform == "android":
+        try:
+            from android.storage import primary_external_storage_path
+            storage = primary_external_storage_path()
+            return os.path.join(storage, "Download", "yt-dlp")
+        except Exception:
+            pass
+        try:
+            from jnius import autoclass
+            Environment = autoclass("android.os.Environment")
+            storage = Environment.getExternalStorageDirectory().getAbsolutePath()
+            return os.path.join(storage, "Download", "yt-dlp")
+        except Exception:
+            pass
+        return "/storage/emulated/0/Download/yt-dlp"
+    else:
+        return os.path.join(os.path.expanduser("~"), "yt-dlp-downloads")
 
 
 class DownloadItem(RecycleDataViewBehavior, BoxLayout):
@@ -38,12 +49,13 @@ class DownloadItem(RecycleDataViewBehavior, BoxLayout):
         self.height = dp(60)
         self.padding = dp(8)
         self.spacing = dp(8)
+        self.owner = None
+        self.file_name = ""
 
         self.name_label = Label(
             size_hint_x=0.6,
             halign="left",
             valign="middle",
-            text_size=(self.width - dp(16), None),
             font_size=dp(14),
             color=(1, 1, 1, 1),
         )
@@ -68,13 +80,14 @@ class DownloadItem(RecycleDataViewBehavior, BoxLayout):
         self.add_widget(self.delete_btn)
 
     def on_delete(self, instance):
-        if hasattr(self, "owner"):
-            self.owner.delete_file(self.name_label.text)
+        if self.owner and self.file_name:
+            self.owner.delete_file(self.file_name)
 
     def refresh_view_attrs(self, rv, index, data):
         self.name_label.text = data.get("name", "")
         self.size_label.text = data.get("size", "")
         self.owner = rv
+        self.file_name = data.get("name", "")
         return super().refresh_view_attrs(rv, index, data)
 
 
@@ -85,9 +98,8 @@ class DownloadPanel(BoxLayout):
         self.padding = dp(10)
         self.spacing = dp(10)
         self.download_thread = None
-        self.download_id = None
+        self.audio_only = False
 
-        # URL 입력
         url_layout = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -113,7 +125,6 @@ class DownloadPanel(BoxLayout):
         url_layout.add_widget(self.info_btn)
         self.add_widget(url_layout)
 
-        # 비디오 정보 영역
         self.info_layout = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
@@ -130,7 +141,6 @@ class DownloadPanel(BoxLayout):
         self.title_label = Label(
             size_hint_y=None,
             height=dp(40),
-            text_size=(self.width - dp(20), None),
             halign="left",
             valign="middle",
             font_size=dp(14),
@@ -148,14 +158,12 @@ class DownloadPanel(BoxLayout):
         self.info_layout.add_widget(self.uploader_label)
         self.add_widget(self.info_layout)
 
-        # 포맷 선택
         format_layout = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
             height=dp(40),
             spacing=dp(5),
         )
-        self.audio_only = False
         self.video_btn = Button(
             text="비디오",
             size_hint_x=0.5,
@@ -176,7 +184,6 @@ class DownloadPanel(BoxLayout):
         format_layout.add_widget(self.audio_btn)
         self.add_widget(format_layout)
 
-        # 품질 선택
         self.quality_spinner = Spinner(
             text="최고 화질",
             values=["최고 화질", "1080p", "720p", "480p", "360p"],
@@ -186,7 +193,6 @@ class DownloadPanel(BoxLayout):
         )
         self.add_widget(self.quality_spinner)
 
-        # 진행률
         progress_layout = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
@@ -213,7 +219,6 @@ class DownloadPanel(BoxLayout):
         progress_layout.add_widget(self.speed_label)
         self.add_widget(progress_layout)
 
-        # 다운로드 버튼
         self.download_btn = Button(
             text="다운로드 시작",
             size_hint_y=None,
@@ -225,7 +230,6 @@ class DownloadPanel(BoxLayout):
         self.download_btn.bind(on_press=lambda x: self.start_download())
         self.add_widget(self.download_btn)
 
-        # 에러 메시지
         self.error_label = Label(
             text="",
             size_hint_y=None,
@@ -290,7 +294,7 @@ class DownloadPanel(BoxLayout):
 
     def start_download(self):
         url = self.url_input.text.strip()
-        if not url or self.download_thread and self.download_thread.is_alive():
+        if not url or (self.download_thread and self.download_thread.is_alive()):
             return
 
         self.error_label.text = ""
@@ -315,7 +319,8 @@ class DownloadPanel(BoxLayout):
         self.download_thread.start()
 
     def _download(self, url, quality, audio_only):
-        download_path = self._get_download_path()
+        download_path = get_download_path()
+        os.makedirs(download_path, exist_ok=True)
 
         def progress_hook(d):
             if d["status"] == "downloading":
@@ -367,19 +372,6 @@ class DownloadPanel(BoxLayout):
         except Exception as e:
             Clock.schedule_once(lambda dt: self._download_error(str(e)))
 
-    def _get_download_path(self):
-        if platform == "android":
-            from android.storage import primary_external_storage_path
-            from android.permissions import Permission, request_permissions
-
-            storage = primary_external_storage_path()
-            download_path = os.path.join(storage, "Download", "yt-dlp")
-        else:
-            download_path = os.path.join(os.path.expanduser("~"), "yt-dlp-downloads")
-
-        os.makedirs(download_path, exist_ok=True)
-        return download_path
-
     def _update_progress(self, progress, speed, eta):
         self.progress_bar.value = progress
         self.speed_label.text = f"{speed} {eta}"
@@ -390,7 +382,6 @@ class DownloadPanel(BoxLayout):
         self.download_btn.disabled = False
         self.download_btn.text = "다운로드 시작"
 
-        # Refresh library
         app = App.get_running_app()
         if hasattr(app, "library_panel"):
             app.library_panel.refresh()
@@ -418,7 +409,6 @@ class LibraryPanel(BoxLayout):
                 orientation="vertical",
             )
         )
-        self.rv.bind(minimum_height=self.rv.children[0].setter("height"))
 
         self.empty_label = Label(
             text="다운로드한 파일이 없습니다",
@@ -429,33 +419,22 @@ class LibraryPanel(BoxLayout):
         self.add_widget(self.rv)
         self.add_widget(self.empty_label)
 
-        self.refresh()
-
-    def on_enter(self):
-        self.refresh()
-
     def refresh(self):
-        download_path = self._get_download_path()
+        download_path = get_download_path()
         files = []
 
         if os.path.exists(download_path):
-            for f in os.listdir(download_path):
+            for f in sorted(os.listdir(download_path), key=lambda x: os.path.getmtime(os.path.join(download_path, x)), reverse=True):
                 if f.endswith((".mp4", ".mp3", ".mkv", ".webm", ".m4a")):
                     filepath = os.path.join(download_path, f)
                     size = os.path.getsize(filepath)
                     files.append({"name": f, "size": self._format_size(size)})
 
         self.rv.data = files
-        self.empty_label.visible = len(files) == 0
-        self.rv.visible = len(files) > 0
-
-    def _get_download_path(self):
-        if platform == "android":
-            from android.storage import primary_external_storage_path
-            storage = primary_external_storage_path()
-            return os.path.join(storage, "Download", "yt-dlp")
+        if len(files) == 0:
+            self.empty_label.opacity = 1
         else:
-            return os.path.join(os.path.expanduser("~"), "yt-dlp-downloads")
+            self.empty_label.opacity = 0
 
     def _format_size(self, size):
         if size > 1073741824:
@@ -467,7 +446,7 @@ class LibraryPanel(BoxLayout):
         return f"{size} B"
 
     def delete_file(self, filename):
-        download_path = self._get_download_path()
+        download_path = get_download_path()
         filepath = os.path.join(download_path, filename)
         if os.path.exists(filepath):
             os.remove(filepath)
@@ -480,12 +459,10 @@ class YtDlpApp(App):
 
         self.panel = TabbedPanel(do_default_tab=False)
 
-        # 다운로드 탭
         download_tab = TabbedPanelHeader(text="다운로드")
         self.download_panel = DownloadPanel()
         download_tab.add_widget(self.download_panel)
 
-        # 라이브러리 탭
         library_tab = TabbedPanelHeader(text="라이브러리")
         self.library_panel = LibraryPanel()
         library_tab.add_widget(self.library_panel)
