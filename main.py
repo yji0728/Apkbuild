@@ -19,39 +19,10 @@ from kivy.metrics import dp
 import threading
 import os
 import yt_dlp
+from app_runtime import build_download_options, get_download_path
 
-# Force window size for Android
-if platform == "android":
-    from jnius import autoclass, cast
-    from jnius import JavaMethod
-    try:
-        Activity = autoclass("android.app.Activity")
-        Context = autoclass("android.content.Context")
-        WindowManager = autoclass("android.view.WindowManager")
-        display = autoclass("android.view.Display")
-        Resources = autoclass("android.content.res.Resources")
-        
-        activity = Activity.getNativeObject()
-        if activity:
-            window = activity.getWindow()
-            params = window.getAttributes()
-            params.width = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-            params.height = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-            window.setAttributes(params)
-            
-            # Get screen size
-            metrics = Resources.getSystem().getDisplayMetrics()
-            Window.width = int(metrics.widthPixels / metrics.density)
-            Window.height = int(metrics.heightPixels / metrics.density)
-    except Exception as e:
-        print(f"Window setup error: {e}")
-        Window.size = (360, 640)
-else:
+if platform != "android":
     Window.size = (360, 640)
-
-
-def get_download_path():
-    return "/storage/emulated/0/Download/yt-dlp"
 
 
 class DownloadItem(RecycleDataViewBehavior, BoxLayout):
@@ -62,7 +33,7 @@ class DownloadItem(RecycleDataViewBehavior, BoxLayout):
         self.height = dp(60)
         self.padding = dp(8)
         self.spacing = dp(8)
-        self.owner = None
+        self.delete_callback = None
         self.file_name = ""
 
         self.name_label = Label(
@@ -93,13 +64,13 @@ class DownloadItem(RecycleDataViewBehavior, BoxLayout):
         self.add_widget(self.delete_btn)
 
     def on_delete(self, instance):
-        if self.owner and self.file_name:
-            self.owner.delete_file(self.file_name)
+        if self.delete_callback and self.file_name:
+            self.delete_callback(self.file_name)
 
     def refresh_view_attrs(self, rv, index, data):
         self.name_label.text = data.get("name", "")
         self.size_label.text = data.get("size", "")
-        self.owner = rv
+        self.delete_callback = data.get("delete_callback")
         self.file_name = data.get("name", "")
         return super().refresh_view_attrs(rv, index, data)
 
@@ -197,7 +168,7 @@ class DownloadPanel(BoxLayout):
             font_size=dp(14),
         )
         self.audio_btn = Button(
-            text="Audio MP3",
+            text="Audio",
             size_hint_x=0.5,
             background_color=(0.3, 0.3, 0.3, 1),
             color=(1, 1, 1, 1),
@@ -312,7 +283,7 @@ class DownloadPanel(BoxLayout):
         self.download_thread.start()
 
     def _download(self, url, audio_only):
-        download_path = get_download_path()
+        download_path = get_download_path(platform)
         
         def progress_hook(d):
             if d["status"] == "downloading":
@@ -323,27 +294,8 @@ class DownloadPanel(BoxLayout):
 
         try:
             os.makedirs(download_path, exist_ok=True)
-            
-            if audio_only:
-                ydl_opts = {
-                    "format": "bestaudio/best",
-                    "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
-                    "postprocessors": [{
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }],
-                    "progress_hooks": [progress_hook],
-                    "quiet": True,
-                }
-            else:
-                ydl_opts = {
-                    "format": "best",
-                    "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
-                    "progress_hooks": [progress_hook],
-                    "quiet": True,
-                    "merge_output_format": "mp4",
-                }
+
+            ydl_opts = build_download_options(download_path, audio_only, progress_hook)
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -361,6 +313,10 @@ class DownloadPanel(BoxLayout):
         self.download_btn.disabled = False
         self.download_btn.text = "Download"
 
+        app = App.get_running_app()
+        if hasattr(app, "library_panel"):
+            app.library_panel.refresh()
+
     def _download_error(self, msg):
         self.progress_label.text = "Error"
         self.error_label.text = msg
@@ -376,14 +332,15 @@ class LibraryPanel(BoxLayout):
         self.rv = RecycleView()
         self.rv.data = []
         self.rv.viewclass = DownloadItem
-        self.rv.add_widget(
-            RecycleBoxLayout(
-                default_size=(None, dp(60)),
-                default_size_hint=(1, None),
-                size_hint_y=None,
-                orientation="vertical",
-            )
+        layout = RecycleBoxLayout(
+            default_size=(None, dp(60)),
+            default_size_hint=(1, None),
+            size_hint_y=None,
+            orientation="vertical",
         )
+        layout.bind(minimum_height=layout.setter("height"))
+        self.rv.layout_manager = layout
+        self.rv.add_widget(layout)
 
         self.empty_label = Label(
             text="No downloads yet",
@@ -395,7 +352,7 @@ class LibraryPanel(BoxLayout):
         self.add_widget(self.empty_label)
 
     def refresh(self):
-        download_path = get_download_path()
+        download_path = get_download_path(platform)
         files = []
 
         try:
@@ -404,7 +361,11 @@ class LibraryPanel(BoxLayout):
                     if f.endswith((".mp4", ".mp3", ".mkv", ".webm", ".m4a")):
                         filepath = os.path.join(download_path, f)
                         size = os.path.getsize(filepath)
-                        files.append({"name": f, "size": self._format_size(size)})
+                        files.append({
+                            "name": f,
+                            "size": self._format_size(size),
+                            "delete_callback": self.delete_file,
+                        })
         except Exception as e:
             print(f"Refresh error: {e}")
 
@@ -421,7 +382,7 @@ class LibraryPanel(BoxLayout):
         return f"{size} B"
 
     def delete_file(self, filename):
-        download_path = get_download_path()
+        download_path = get_download_path(platform)
         filepath = os.path.join(download_path, filename)
         try:
             if os.path.exists(filepath):
