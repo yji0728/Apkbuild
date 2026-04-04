@@ -20,25 +20,38 @@ import threading
 import os
 import yt_dlp
 
+# Force window size for Android
+if platform == "android":
+    from jnius import autoclass, cast
+    from jnius import JavaMethod
+    try:
+        Activity = autoclass("android.app.Activity")
+        Context = autoclass("android.content.Context")
+        WindowManager = autoclass("android.view.WindowManager")
+        display = autoclass("android.view.Display")
+        Resources = autoclass("android.content.res.Resources")
+        
+        activity = Activity.getNativeObject()
+        if activity:
+            window = activity.getWindow()
+            params = window.getAttributes()
+            params.width = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            params.height = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            window.setAttributes(params)
+            
+            # Get screen size
+            metrics = Resources.getSystem().getDisplayMetrics()
+            Window.width = int(metrics.widthPixels / metrics.density)
+            Window.height = int(metrics.heightPixels / metrics.density)
+    except Exception as e:
+        print(f"Window setup error: {e}")
+        Window.size = (360, 640)
+else:
+    Window.size = (360, 640)
+
 
 def get_download_path():
-    if platform == "android":
-        try:
-            from android.storage import primary_external_storage_path
-            storage = primary_external_storage_path()
-            return os.path.join(storage, "Download", "yt-dlp")
-        except Exception:
-            pass
-        try:
-            from jnius import autoclass
-            Environment = autoclass("android.os.Environment")
-            storage = Environment.getExternalStorageDirectory().getAbsolutePath()
-            return os.path.join(storage, "Download", "yt-dlp")
-        except Exception:
-            pass
-        return "/storage/emulated/0/Download/yt-dlp"
-    else:
-        return os.path.join(os.path.expanduser("~"), "yt-dlp-downloads")
+    return "/storage/emulated/0/Download/yt-dlp"
 
 
 class DownloadItem(RecycleDataViewBehavior, BoxLayout):
@@ -67,11 +80,11 @@ class DownloadItem(RecycleDataViewBehavior, BoxLayout):
             color=(0.6, 0.6, 0.6, 1),
         )
         self.delete_btn = Button(
-            text="삭제",
+            text="Del",
             size_hint_x=0.2,
             background_color=(0.8, 0.2, 0.2, 1),
             color=(1, 1, 1, 1),
-            font_size=dp(14),
+            font_size=dp(12),
         )
         self.delete_btn.bind(on_press=self.on_delete)
 
@@ -100,42 +113,53 @@ class DownloadPanel(BoxLayout):
         self.download_thread = None
         self.audio_only = False
 
+        # Title
+        title = Label(
+            text="yt-dlp Downloader",
+            size_hint_y=None,
+            height=dp(40),
+            font_size=dp(20),
+            color=(0.2, 0.6, 1, 1),
+        )
+        self.add_widget(title)
+
         url_layout = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(40),
+            height=dp(45),
             spacing=dp(5),
         )
         self.url_input = TextInput(
-            hint_text="URL 입력 (YouTube, TikTok, ...)",
+            hint_text="YouTube URL",
             multiline=False,
             font_size=dp(14),
             size_hint_x=0.75,
         )
         self.url_input.bind(on_text_validate=lambda x: self.get_info())
         self.info_btn = Button(
-            text="조회",
+            text="Info",
             size_hint_x=0.25,
             background_color=(0.2, 0.5, 1, 1),
             color=(1, 1, 1, 1),
-            font_size=dp(16),
+            font_size=dp(14),
         )
         self.info_btn.bind(on_press=lambda x: self.get_info())
         url_layout.add_widget(self.url_input)
         url_layout.add_widget(self.info_btn)
         self.add_widget(url_layout)
 
+        # Info display
         self.info_layout = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            height=0,
+            height=dp(200),
             spacing=dp(5),
         )
         self.info_layout.bind(minimum_height=self.info_layout.setter("height"))
 
         self.thumbnail = AsyncImage(
             size_hint_y=None,
-            height=dp(180),
+            height=dp(120),
             allow_stretch=True,
         )
         self.title_label = Label(
@@ -143,14 +167,14 @@ class DownloadPanel(BoxLayout):
             height=dp(40),
             halign="left",
             valign="middle",
-            font_size=dp(14),
+            font_size=dp(12),
             color=(1, 1, 1, 1),
         )
         self.uploader_label = Label(
             size_hint_y=None,
-            height=dp(25),
+            height=dp(20),
             halign="left",
-            font_size=dp(12),
+            font_size=dp(10),
             color=(0.7, 0.7, 0.7, 1),
         )
         self.info_layout.add_widget(self.thumbnail)
@@ -158,6 +182,7 @@ class DownloadPanel(BoxLayout):
         self.info_layout.add_widget(self.uploader_label)
         self.add_widget(self.info_layout)
 
+        # Format buttons
         format_layout = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -165,18 +190,18 @@ class DownloadPanel(BoxLayout):
             spacing=dp(5),
         )
         self.video_btn = Button(
-            text="비디오",
+            text="Video",
             size_hint_x=0.5,
             background_color=(0.2, 0.5, 1, 1),
             color=(1, 1, 1, 1),
-            font_size=dp(16),
+            font_size=dp(14),
         )
         self.audio_btn = Button(
-            text="오디오 (MP3)",
+            text="Audio MP3",
             size_hint_x=0.5,
             background_color=(0.3, 0.3, 0.3, 1),
             color=(1, 1, 1, 1),
-            font_size=dp(16),
+            font_size=dp(14),
         )
         self.video_btn.bind(on_press=lambda x: self.set_format(False))
         self.audio_btn.bind(on_press=lambda x: self.set_format(True))
@@ -184,57 +209,36 @@ class DownloadPanel(BoxLayout):
         format_layout.add_widget(self.audio_btn)
         self.add_widget(format_layout)
 
-        self.quality_spinner = Spinner(
-            text="최고 화질",
-            values=["최고 화질", "1080p", "720p", "480p", "360p"],
-            size_hint_y=None,
-            height=dp(40),
-            font_size=dp(14),
-        )
-        self.add_widget(self.quality_spinner)
-
-        progress_layout = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=dp(80),
-            spacing=dp(5),
-        )
+        # Progress
         self.progress_bar = ProgressBar(max=100, size_hint_y=None, height=dp(20))
         self.progress_label = Label(
-            text="대기 중",
+            text="Ready",
             size_hint_y=None,
             height=dp(25),
             font_size=dp(12),
             color=(0.7, 0.7, 0.7, 1),
         )
-        self.speed_label = Label(
-            text="",
-            size_hint_y=None,
-            height=dp(25),
-            font_size=dp(12),
-            color=(0.5, 0.5, 0.5, 1),
-        )
-        progress_layout.add_widget(self.progress_bar)
-        progress_layout.add_widget(self.progress_label)
-        progress_layout.add_widget(self.speed_label)
-        self.add_widget(progress_layout)
+        self.add_widget(self.progress_bar)
+        self.add_widget(self.progress_label)
 
+        # Download button
         self.download_btn = Button(
-            text="다운로드 시작",
+            text="Download",
             size_hint_y=None,
             height=dp(50),
             background_color=(0.2, 0.7, 0.3, 1),
             color=(1, 1, 1, 1),
-            font_size=dp(18),
+            font_size=dp(16),
         )
         self.download_btn.bind(on_press=lambda x: self.start_download())
         self.add_widget(self.download_btn)
 
+        # Error
         self.error_label = Label(
             text="",
             size_hint_y=None,
             height=dp(30),
-            font_size=dp(12),
+            font_size=dp(10),
             color=(1, 0.3, 0.3, 1),
         )
         self.add_widget(self.error_label)
@@ -256,6 +260,7 @@ class DownloadPanel(BoxLayout):
         self.error_label.text = ""
         self.info_btn.text = "..."
         self.info_btn.disabled = True
+        self.title_label.text = "Loading..."
 
         def _get_info():
             try:
@@ -264,13 +269,11 @@ class DownloadPanel(BoxLayout):
                     info = ydl.extract_info(url, download=False)
 
                 Clock.schedule_once(
-                    lambda dt: self._show_info(
-                        {
-                            "title": info.get("title", ""),
-                            "uploader": info.get("uploader", ""),
-                            "thumbnail": info.get("thumbnail", ""),
-                        }
-                    )
+                    lambda dt: self._show_info({
+                        "title": info.get("title", "Unknown"),
+                        "uploader": info.get("uploader", ""),
+                        "thumbnail": info.get("thumbnail", ""),
+                    })
                 )
             except Exception as e:
                 Clock.schedule_once(lambda dt: self._show_error(str(e)))
@@ -283,88 +286,65 @@ class DownloadPanel(BoxLayout):
         self.title_label.text = info["title"]
         self.uploader_label.text = info["uploader"]
         self.thumbnail.source = info["thumbnail"]
-        self.info_layout.height = dp(250)
 
     def _show_error(self, msg):
         self.error_label.text = msg
+        self.title_label.text = "Error"
 
     def _reset_info_btn(self):
-        self.info_btn.text = "조회"
+        self.info_btn.text = "Info"
         self.info_btn.disabled = False
 
     def start_download(self):
         url = self.url_input.text.strip()
-        if not url or (self.download_thread and self.download_thread.is_alive()):
+        if not url:
             return
 
         self.error_label.text = ""
         self.progress_bar.value = 0
-        self.progress_label.text = "다운로드 중..."
-        self.speed_label.text = ""
+        self.progress_label.text = "Starting..."
         self.download_btn.disabled = True
-        self.download_btn.text = "다운로드 중..."
-
-        quality_map = {
-            "최고 화질": "best",
-            "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-            "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-            "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-            "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-        }
-        quality = quality_map.get(self.quality_spinner.text, "best")
+        self.download_btn.text = "Downloading..."
 
         self.download_thread = threading.Thread(
-            target=self._download, args=(url, quality, self.audio_only), daemon=True
+            target=self._download, args=(url, self.audio_only), daemon=True
         )
         self.download_thread.start()
 
-    def _download(self, url, quality, audio_only):
+    def _download(self, url, audio_only):
         download_path = get_download_path()
-        os.makedirs(download_path, exist_ok=True)
-
+        
         def progress_hook(d):
             if d["status"] == "downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
                 downloaded = d.get("downloaded_bytes", 0)
                 progress = (downloaded / total * 100) if total else 0
-                speed = d.get("speed", 0)
-                eta = d.get("eta", 0)
+                Clock.schedule_once(lambda dt: self._update_progress(progress))
 
-                speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else "계산 중..."
-                eta_str = f"ETA: {eta}초" if eta else ""
-
-                Clock.schedule_once(
-                    lambda dt: self._update_progress(progress, speed_str, eta_str)
-                )
-            elif d["status"] == "finished":
-                Clock.schedule_once(lambda dt: self._update_progress(100, "변환 중...", ""))
-
-        if audio_only:
-            ydl_opts = {
-                "format": "bestaudio/best",
-                "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
-                "postprocessors": [
-                    {
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            
+            if audio_only:
+                ydl_opts = {
+                    "format": "bestaudio/best",
+                    "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
+                    "postprocessors": [{
                         "key": "FFmpegExtractAudio",
                         "preferredcodec": "mp3",
                         "preferredquality": "192",
-                    }
-                ],
-                "progress_hooks": [progress_hook],
-                "quiet": True,
-                "no_warnings": True,
-            }
-        else:
-            ydl_opts = {
-                "format": quality,
-                "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
-                "progress_hooks": [progress_hook],
-                "quiet": True,
-                "no_warnings": True,
-                "merge_output_format": "mp4",
-            }
+                    }],
+                    "progress_hooks": [progress_hook],
+                    "quiet": True,
+                }
+            else:
+                ydl_opts = {
+                    "format": "best",
+                    "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
+                    "progress_hooks": [progress_hook],
+                    "quiet": True,
+                    "merge_output_format": "mp4",
+                }
 
-        try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
 
@@ -372,25 +352,20 @@ class DownloadPanel(BoxLayout):
         except Exception as e:
             Clock.schedule_once(lambda dt: self._download_error(str(e)))
 
-    def _update_progress(self, progress, speed, eta):
+    def _update_progress(self, progress):
         self.progress_bar.value = progress
-        self.speed_label.text = f"{speed} {eta}"
+        self.progress_label.text = f"Downloading... {int(progress)}%"
 
     def _download_complete(self):
-        self.progress_label.text = "완료!"
-        self.speed_label.text = ""
+        self.progress_label.text = "Complete!"
         self.download_btn.disabled = False
-        self.download_btn.text = "다운로드 시작"
-
-        app = App.get_running_app()
-        if hasattr(app, "library_panel"):
-            app.library_panel.refresh()
+        self.download_btn.text = "Download"
 
     def _download_error(self, msg):
-        self.progress_label.text = "오류"
+        self.progress_label.text = "Error"
         self.error_label.text = msg
         self.download_btn.disabled = False
-        self.download_btn.text = "다운로드 시작"
+        self.download_btn.text = "Download"
 
 
 class LibraryPanel(BoxLayout):
@@ -411,9 +386,9 @@ class LibraryPanel(BoxLayout):
         )
 
         self.empty_label = Label(
-            text="다운로드한 파일이 없습니다",
+            text="No downloads yet",
             color=(0.5, 0.5, 0.5, 1),
-            font_size=dp(16),
+            font_size=dp(14),
         )
 
         self.add_widget(self.rv)
@@ -423,18 +398,18 @@ class LibraryPanel(BoxLayout):
         download_path = get_download_path()
         files = []
 
-        if os.path.exists(download_path):
-            for f in sorted(os.listdir(download_path), key=lambda x: os.path.getmtime(os.path.join(download_path, x)), reverse=True):
-                if f.endswith((".mp4", ".mp3", ".mkv", ".webm", ".m4a")):
-                    filepath = os.path.join(download_path, f)
-                    size = os.path.getsize(filepath)
-                    files.append({"name": f, "size": self._format_size(size)})
+        try:
+            if os.path.exists(download_path):
+                for f in sorted(os.listdir(download_path), key=lambda x: os.path.getmtime(os.path.join(download_path, x)), reverse=True):
+                    if f.endswith((".mp4", ".mp3", ".mkv", ".webm", ".m4a")):
+                        filepath = os.path.join(download_path, f)
+                        size = os.path.getsize(filepath)
+                        files.append({"name": f, "size": self._format_size(size)})
+        except Exception as e:
+            print(f"Refresh error: {e}")
 
         self.rv.data = files
-        if len(files) == 0:
-            self.empty_label.opacity = 1
-        else:
-            self.empty_label.opacity = 0
+        self.empty_label.opacity = 1 if len(files) == 0 else 0
 
     def _format_size(self, size):
         if size > 1073741824:
@@ -448,22 +423,25 @@ class LibraryPanel(BoxLayout):
     def delete_file(self, filename):
         download_path = get_download_path()
         filepath = os.path.join(download_path, filename)
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except Exception as e:
+            print(f"Delete error: {e}")
         self.refresh()
 
 
 class YtDlpApp(App):
     def build(self):
-        Window.clearcolor = (0.04, 0.04, 0.04, 1)
+        Window.clearcolor = (0.1, 0.1, 0.1, 1)
 
         self.panel = TabbedPanel(do_default_tab=False)
 
-        download_tab = TabbedPanelHeader(text="다운로드")
+        download_tab = TabbedPanelHeader(text="Download")
         self.download_panel = DownloadPanel()
         download_tab.add_widget(self.download_panel)
 
-        library_tab = TabbedPanelHeader(text="라이브러리")
+        library_tab = TabbedPanelHeader(text="Library")
         self.library_panel = LibraryPanel()
         library_tab.add_widget(self.library_panel)
 
@@ -475,7 +453,7 @@ class YtDlpApp(App):
         return self.panel
 
     def on_tab_change(self, instance, value):
-        if value.text == "라이브러리":
+        if value.text == "Library":
             self.library_panel.refresh()
 
 
