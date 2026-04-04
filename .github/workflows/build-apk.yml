@@ -36,8 +36,14 @@ jobs:
           key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
           restore-keys: ${{ runner.os }}-buildozer-
 
+      - name: Set Java 17
+        run: |
+          echo "JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/temurin-17-jdk-amd64/bin" >> $GITHUB_PATH
+
       - name: Build APK
         run: |
+          java -version
           buildozer android debug
         env:
           ANDROID_SDK_HOME: /home/runner/.android
