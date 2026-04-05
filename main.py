@@ -1,223 +1,319 @@
 from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
-from kivy.uix.progressbar import ProgressBar
-from kivy.uix.image import AsyncImage
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.gridlayout import GridLayout
-from kivy.core.window import Window
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.textinput import TextInput
 from kivy.clock import Clock
-from kivy.metrics import dp
-
+from kivy.utils import platform
+from kivy.core.window import Window
 import threading
 import os
 import yt_dlp
 
+# Disable problematic clipboard providers on Android
+if platform == 'android':
+    import os
+    os.environ['KIVY_CLIPBOARD'] = ''
+
 Window.size = (360, 640)
 
-DOWNLOAD_PATH = "/storage/emulated/0/Download/yt-dlp"
-
-
-class YtDlpApp(App):
+class SimpleYtDlpApp(App):
     def build(self):
-        Window.clearcolor = (0.06, 0.06, 0.06, 1)
+        self.title = "Simple yt-dlp Downloader"
         
-        layout = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        # Main layout
+        layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
-        layout.add_widget(Label(text="yt-dlp", size_hint_y=None, height=dp(40), font_size=dp(24), color=(1, 0.2, 0.2, 1)))
+        # Title
+        layout.add_widget(Label(
+            text='Simple yt-dlp',
+            size_hint_y=None,
+            height=40,
+            font_size='20sp',
+            bold=True,
+            color=(1, 0.2, 0.2, 1)  # Red like yt-dlp logo
+        ))
         
-        self.url_input = TextInput(hint_text="Enter video URL", multiline=False, size_hint_y=None, height=dp(45), font_size=dp(14))
-        self.url_input.bind(on_text_validate=self.get_info)
+        # URL input
+        self.url_input = TextInput(
+            hint_text='Enter YouTube or video URL',
+            multiline=False,
+            size_hint_y=None,
+            height=45,
+            font_size='14sp',
+            background_color=(0.15, 0.15, 0.15, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(1, 1, 1, 1),
+            hint_text_color=(0.7, 0.7, 0.7, 1)
+        )
+        self.url_input.bind(on_text_validate=self.on_enter)
         layout.add_widget(self.url_input)
         
-        self.info_btn = Button(text="Get Video Info", size_hint_y=None, height=dp(40), background_color=(0.2, 0.4, 0.8, 1), font_size=dp(14))
-        self.info_btn.bind(on_press=self.get_info)
-        layout.add_widget(self.info_btn)
+        # Buttons layout
+        btn_layout = BoxLayout(size_hint_y=None, height=40, spacing=5)
         
-        self.thumbnail = AsyncImage(size_hint_y=None, height=dp(180), allow_stretch=True)
-        layout.add_widget(self.thumbnail)
+        # Get info button
+        self.info_btn = Button(
+            text='Get Info',
+            font_size='14sp',
+            background_color=(0.2, 0.5, 0.8, 1),
+            color=(1, 1, 1, 1)
+        )
+        self.info_btn.bind(on_press=self.get_video_info)
+        btn_layout.add_widget(self.info_btn)
         
-        self.title_label = Label(text="", size_hint_y=None, height=dp(40), font_size=dp(12), color=(1, 1, 1, 1))
-        layout.add_widget(self.title_label)
+        # Download button
+        self.download_btn = Button(
+            text='Download MP3',
+            font_size='14sp',
+            background_color=(0.2, 0.8, 0.2, 1),
+            color=(1, 1, 1, 1),
+            disabled=True
+        )
+        self.download_btn.bind(on_press=self.download_audio)
+        btn_layout.add_widget(self.download_btn)
         
-        format_layout = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        self.video_btn = Button(text="Video", background_color=(0.3, 0.6, 1, 1), font_size=dp(14))
-        self.video_btn.bind(on_press=lambda x: self.set_format("video"))
-        self.audio_btn = Button(text="Audio (MP3)", background_color=(0.2, 0.2, 0.2, 1), font_size=dp(14))
-        self.audio_btn.bind(on_press=lambda x: self.set_format("audio"))
-        format_layout.add_widget(self.video_btn)
-        format_layout.add_widget(self.audio_btn)
-        layout.add_widget(format_layout)
+        layout.add_widget(btn_layout)
         
-        quality_layout = BoxLayout(size_hint_y=None, height=dp(35), spacing=dp(5))
-        self.quality_btns = {}
-        for q in ["Best", "1080p", "720p", "480p", "360p"]:
-            btn = Button(text=q, size_hint_x=1, font_size=dp(11), background_color=(0.15, 0.15, 0.15, 1))
-            btn.bind(on_press=lambda x, q=q: self.set_quality(q))
-            quality_layout.add_widget(btn)
-            self.quality_btns[q] = btn
-        self.current_quality = "Best"
-        self.quality_btns["Best"].background_color = (0.3, 0.6, 1, 1)
-        layout.add_widget(quality_layout)
-        
-        self.progress_bar = ProgressBar(max=100, size_hint_y=None, height=dp(25))
-        layout.add_widget(self.progress_bar)
-        
-        self.status_label = Label(text="Ready", size_hint_y=None, height=dp(25), font_size=dp(12), color=(0.6, 0.6, 0.6, 1))
+        # Status label
+        self.status_label = Label(
+            text='Ready - Enter a URL and click Get Info',
+            size_hint_y=None,
+            height=30,
+            font_size='12sp',
+            color=(0.8, 0.8, 0.8, 1),
+            halign='left'
+        )
         layout.add_widget(self.status_label)
         
-        self.download_btn = Button(text="DOWNLOAD", size_hint_y=None, height=dp(50), background_color=(0.2, 0.7, 0.2, 1), font_size=dp(18))
-        self.download_btn.bind(on_press=self.start_download)
-        layout.add_widget(self.download_btn)
+        # Result/info display
+        self.result_label = Label(
+            text='',
+            size_hint_y=None,
+            height=100,
+            font_size='12sp',
+            color=(0.9, 0.9, 0.9, 1),
+            halign='left',
+            valign='top'
+        )
+        layout.add_widget(self.result_label)
         
-        self.error_label = Label(text="", size_hint_y=None, height=dp(30), font_size=dp(10), color=(1, 0.3, 0.3, 1))
-        layout.add_widget(self.error_label)
+        # Progress bar (hidden by default)
+        self.progress_bar = Label(
+            text='',
+            size_hint_y=None,
+            height=20,
+            font_size='10sp',
+            color=(0.2, 0.8, 0.2, 1),
+            halign='left'
+        )
+        layout.add_widget(self.progress_bar)
         
-        layout.add_widget(Label(text="Downloaded Files:", size_hint_y=None, height=dp(30), font_size=dp(14), color=(0.8, 0.8, 0.8, 1)))
-        
-        self.files_layout = GridLayout(cols=1, size_hint_y=None, spacing=dp(2))
-        self.files_layout.bind(minimum_height=self.files_layout.setter("height"))
-        scroll = ScrollView(size_hint_y=None, height=dp(150))
-        scroll.add_widget(self.files_layout)
-        layout.add_widget(scroll)
-        
-        self.current_format = "video"
-        self.download_thread = None
+        # Initialize
         self.video_info = None
+        self.is_downloading = False
         
-        self.refresh_files()
         return layout
     
-    def set_format(self, fmt):
-        self.current_format = fmt
-        if fmt == "video":
-            self.video_btn.background_color = (0.3, 0.6, 1, 1)
-            self.audio_btn.background_color = (0.2, 0.2, 0.2, 1)
-        else:
-            self.audio_btn.background_color = (0.3, 0.6, 1, 1)
-            self.video_btn.background_color = (0.2, 0.2, 0.2, 1)
+    def on_enter(self, instance):
+        self.get_video_info()
     
-    def set_quality(self, q):
-        self.current_quality = q
-        for key, btn in self.quality_btns.items():
-            btn.background_color = (0.15, 0.15, 0.15, 1)
-        self.quality_btns[q].background_color = (0.3, 0.6, 1, 1)
-    
-    def get_info(self, *args):
+    def get_video_info(self):
         url = self.url_input.text.strip()
         if not url:
+            self.status_label.text = 'Please enter a URL'
             return
-        self.status_label.text = "Fetching info..."
+            
+        # Reset UI
+        self.status_label.text = 'Fetching video info...'
         self.info_btn.disabled = True
-        self.title_label.text = "Loading..."
-        self.error_label.text = ""
+        self.download_btn.disabled = True
+        self.result_label.text = ''
+        self.progress_bar.text = ''
         
-        def _get():
+        def fetch_info():
             try:
-                ydl_opts = {"quiet": True, "no_warnings": True}
+                # Configure yt-dlp options
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': False,
+                    'no_check_certificate': True,
+                }
+                
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                Clock.schedule_once(lambda dt: self._on_info(info))
+                
+                # Store info for download
+                self.video_info = info
+                
+                # Update UI on main thread
+                Clock.schedule_once(lambda dt: self.update_info_display(info))
             except Exception as e:
-                Clock.schedule_once(lambda dt: self._on_error(str(e)))
+                error_msg = str(e)
+                if 'Unsupported URL' in error_msg:
+                    error_msg = 'Unsupported URL. Please check the link.'
+                elif 'HTTP Error 404' in error_msg:
+                    error_msg = 'Video not found or unavailable.'
+                elif 'Video unavailable' in error_msg:
+                    error_msg = 'Video is unavailable or private.'
+                Clock.schedule_once(lambda dt: self.show_error(error_msg))
         
-        threading.Thread(target=_get, daemon=True).start()
+        # Run in background thread
+        threading.Thread(target=fetch_info, daemon=True).start()
     
-    def _on_info(self, info):
-        self.video_info = info
-        self.title_label.text = info.get("title", "Unknown")[:50]
-        if info.get("thumbnail"):
-            self.thumbnail.source = info["thumbnail"]
-        self.status_label.text = "Ready to download"
+    def update_info_display(self, info):
+        title = info.get('title', 'Unknown Title')
+        uploader = info.get('uploader', 'Unknown')
+        duration = info.get('duration', 0)
+        view_count = info.get('view_count', 0)
+        
+        # Format duration
+        if duration and isinstance(duration, (int, float)) and duration > 0:
+            hours = int(duration // 3600)
+            minutes = int((duration % 3600) // 60)
+            seconds = int(duration % 60)
+            if hours > 0:
+                duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                duration_str = f"{minutes:02d}:{seconds:02d}"
+        else:
+            duration_str = "Unknown"
+        
+        # Format view count
+        if view_count:
+            if view_count >= 1000000:
+                views_str = f"{view_count/1000000:.1f}M"
+            elif view_count >= 1000:
+                views_str = f"{view_count/1000:.1f}K"
+            else:
+                views_str = str(view_count)
+        else:
+            views_str = "Unknown"
+        
+        # Update display
+        self.result_label.text = f"Title: {title}\nChannel: {uploader}\nDuration: {duration_str}\nViews: {views_str}"
+        self.status_label.text = 'Info loaded! Ready to download MP3'
         self.info_btn.disabled = False
-        self.info_btn.text = "Info Loaded"
+        self.download_btn.disabled = False
+        self.progress_bar.text = ''
     
-    def _on_error(self, msg):
-        self.error_label.text = msg[:100]
-        self.status_label.text = "Error"
+    def show_error(self, msg):
+        self.status_label.text = 'Error occurred'
+        self.result_label.text = f'Error: {msg[:150]}...' if len(msg) > 150 else f'Error: {msg}'
         self.info_btn.disabled = False
+        self.download_btn.disabled = True
+        self.progress_bar.text = ''
     
-    def start_download(self, *args):
+    def download_audio(self):
+        if self.is_downloading:
+            return
+            
+        if not self.video_info:
+            self.show_error('No video information available. Please get info first.')
+            return
+            
         url = self.url_input.text.strip()
         if not url:
-            self.error_label.text = "Enter URL first"
+            self.show_error('Please enter a URL')
             return
-        if self.download_thread and self.download_thread.is_alive():
-            return
-        
-        self.status_label.text = "Starting..."
-        self.progress_bar.value = 0
+            
+        # Set downloading state
+        self.is_downloading = True
+        self.status_label.text = 'Preparing download...'
         self.download_btn.disabled = True
-        self.error_label.text = ""
+        self.progress_bar.text = 'Starting...'
+        self.result_label.text = ''
         
-        def _download():
+        def download_audio():
             try:
-                os.makedirs(DOWNLOAD_PATH, exist_ok=True)
+                # Create download directory
+                download_path = "/storage/emulated/0/Download/yt-dlp"
+                os.makedirs(download_path, exist_ok=True)
                 
-                quality_map = {"Best": "best", "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]", "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]", "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]", "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]"}
+                # Configure yt-dlp for audio download
+                ydl_opts = {
+                    'format': 'bestaudio/best',
+                    'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
+                    'quiet': True,
+                    'no_warnings': True,
+                }
                 
-                if self.current_format == "audio":
-                    ydl_opts = {"format": "bestaudio/best", "outtmpl": os.path.join(DOWNLOAD_PATH, "%(title)s.%(ext)s"), "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}], "quiet": True}
-                else:
-                    ydl_opts = {"format": quality_map.get(self.current_quality, "best"), "outtmpl": os.path.join(DOWNLOAD_PATH, "%(title)s.%(ext)s"), "quiet": True, "merge_output_format": "mp4"}
+                def progress_hook(d):
+                    if d['status'] == 'downloading':
+                        total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                        downloaded = d.get('downloaded_bytes', 0)
+                        
+                        if total > 0:
+                            percent = (downloaded / total) * 100
+                            speed = d.get('speed', 0)
+                            if speed:
+                                speed_mb = speed / 1024 / 1024
+                                Clock.schedule_once(
+                                    lambda dt: self.update_progress(percent, speed_mb)
+                                )
+                            else:
+                                Clock.schedule_once(
+                                    lambda dt: self.update_progress(percent, None)
+                                )
+                        else:
+                            # Show downloaded size if total unknown
+                            mb = downloaded / 1024 / 1024
+                            Clock.schedule_once(
+                                lambda dt: self.update_progress(None, mb)
+                            )
+                    elif d['status'] == 'finished':
+                        Clock.schedule_once(lambda dt: self.download_complete())
+                    elif d['status'] == 'error':
+                        Clock.schedule_once(lambda dt: self.show_error('Download failed'))
                 
-                def progress(d):
-                    if d["status"] == "downloading":
-                        total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
-                        downloaded = d.get("downloaded_bytes", 0)
-                        p = (downloaded / total * 100) if total else 0
-                        Clock.schedule_once(lambda dt: self._update_progress(p))
+                ydl_opts['progress_hooks'] = [progress_hook]
                 
-                ydl_opts["progress_hooks"] = [progress]
-                
+                # Perform download
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
-                Clock.schedule_once(lambda dt: self._on_complete())
+                    
             except Exception as e:
-                Clock.schedule_once(lambda dt: self._on_error(str(e)))
+                error_msg = str(e)
+                if 'Unsupported URL' in error_msg:
+                    error_msg = 'Unsupported URL'
+                elif 'HTTP Error 404' in error_msg:
+                    error_msg = 'Video not found'
+                elif 'Video unavailable' in error_msg:
+                    error_msg = 'Video unavailable'
+                elif 'ffmpeg' in error_msg.lower():
+                    error_msg = 'FFmpeg not found'
+                Clock.schedule_once(lambda dt: self.show_error(error_msg))
+            finally:
+                # Reset downloading state
+                self.is_downloading = False
         
-        self.download_thread = threading.Thread(target=_download, daemon=True)
-        self.download_thread.start()
+        # Run download in background thread
+        threading.Thread(target=download_audio, daemon=True).start()
     
-    def _update_progress(self, p):
-        self.progress_bar.value = p
-        self.status_label.text = f"Downloading... {int(p)}%"
+    def update_progress(self, percent, speed_mb=None):
+        if percent is not None:
+            if speed_mb is not None:
+                self.progress_bar.text = f'{percent:.1f}% ({speed_mb:.1f} MB/s)'
+            else:
+                self.progress_bar.text = f'{percent:.1f}%'
+        elif speed_mb is not None:
+            self.progress_bar.text = f'{speed_mb:.1f} MB downloaded'
+        else:
+            self.progress_bar.text = 'Processing...'
     
-    def _on_complete(self):
-        self.status_label.text = "Complete!"
+    def download_complete(self):
+        self.is_downloading = False
+        self.status_label.text = 'Download complete!'
+        self.progress_bar.text = ''
+        self.result_label.text = 'Audio saved to:\n/storage/emulated/0/Download/yt-dlp\n\nEnter another URL to download more.'
         self.download_btn.disabled = False
-        self.refresh_files()
-    
-    def _on_error(self, msg):
-        self.error_label.text = msg[:100]
-        self.status_label.text = "Error"
-        self.download_btn.disabled = False
-    
-    def refresh_files(self):
-        self.files_layout.clear_widgets()
-        try:
-            if os.path.exists(DOWNLOAD_PATH):
-                files = sorted([f for f in os.listdir(DOWNLOAD_PATH) if f.endswith((".mp4", ".mp3", ".mkv", ".webm", ".m4a"))], key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_PATH, x)), reverse=True)
-                for f in files:
-                    file_layout = BoxLayout(size_hint_y=None, height=dp(35), spacing=dp(5))
-                    file_layout.add_widget(Label(text=f[:30], size_hint_x=0.7, font_size=dp(10), color=(0.9, 0.9, 0.9, 1)))
-                    size = os.path.getsize(os.path.join(DOWNLOAD_PATH, f))
-                    file_layout.add_widget(Label(text=self._format_size(size), size_hint_x=0.3, font_size=dp(10), color=(0.6, 0.6, 0.6, 1)))
-                    self.files_layout.add_widget(file_layout)
-        except Exception as e:
-            print(f"Refresh error: {e}")
-    
-    def _format_size(self, size):
-        if size > 1073741824:
-            return f"{size/1073741824:.1f}GB"
-        elif size > 1048576:
-            return f"{size/1048576:.1f}MB"
-        elif size > 1024:
-            return f"{size/1024:.1f}KB"
-        return f"{size}B"
+        self.download_btn.text = 'Download Another'
 
-
-if __name__ == "__main__":
-    YtDlpApp().run()
+if __name__ == '__main__':
+    SimpleYtDlpApp().run()

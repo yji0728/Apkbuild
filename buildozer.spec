@@ -1,15 +1,15 @@
 [app]
-title = yt-dlp
-package.name = ytdlp
-package.domain = org.ytdlp
+title = Simple yt-dlp
+package.name = simpleyt
+package.domain = org.simpleyt
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,json
+source.include_exts = py,png,jpg,kv,atlas,json,ttf
 version = 1.0.0
-requirements = python3,kivy,yt-dlp,android,pyjnius
+requirements = python3,kivy,yt-dlp,android,pyjnius,ffmpeg
 orientation = portrait
 fullscreen = 1
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE
-android.api = 33
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+android.api = 35
 android.minapi = 21
 android.ndk = 25b
 android.accept_sdk_license = True
