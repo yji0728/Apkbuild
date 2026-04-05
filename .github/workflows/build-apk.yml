@@ -2,6 +2,8 @@ name: Build Android APK
 
 on:
   push:
+    branches: [main, master, claude/redesign-specifications-and-prioritize]
+  pull_request:
     branches: [main, master]
   workflow_dispatch:
 
@@ -16,7 +18,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -25,10 +27,11 @@ jobs:
             libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev \
             libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             openjdk-17-jdk unzip zip curl wget
-          pip install buildozer cython
+          pip install --upgrade pip
+          pip install buildozer cython==0.29.36
 
-      - name: Validate sources
-        run: python -m compileall main.py app_runtime.py create_icon.py
+      - name: Validate Python sources
+        run: python -m compileall main.py app_runtime.py
 
       - name: Cache buildozer
         uses: actions/cache@v4
@@ -36,13 +39,15 @@ jobs:
           path: |
             ~/.buildozer
             ~/.cache/pip
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
-          restore-keys: ${{ runner.os }}-buildozer-
+          key: ${{ runner.os }}-buildozer-v2-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-v2-
+            ${{ runner.os }}-buildozer-
 
       - name: Set Java 17
         run: |
-          echo "JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64" >> $GITHUB_ENV
-          echo "/usr/lib/jvm/temurin-17-jdk-amd64/bin" >> $GITHUB_PATH
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
       - name: Build APK
         run: |
@@ -55,14 +60,17 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: yt-dlp-android
+          name: yt-dlp-android-apk
           path: bin/*.apk
           if-no-files-found: error
+          retention-days: 30
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
           files: bin/*.apk
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
